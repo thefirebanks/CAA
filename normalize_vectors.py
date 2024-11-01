@@ -1,11 +1,15 @@
 from behaviors import ALL_BEHAVIORS, get_vector_path
 from utils.helpers import get_model_path
+import argparse
 import torch as t
 import os
 
+
 def normalize_vectors(model_size: str, is_base: bool, n_layers: int):
     # make normalized_vectors directory
-    normalized_vectors_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "normalized_vectors")
+    normalized_vectors_dir = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "normalized_vectors"
+    )
     if not os.path.exists(normalized_vectors_dir):
         os.makedirs(normalized_vectors_dir)
     for layer in range(n_layers):
@@ -31,9 +35,18 @@ def normalize_vectors(model_size: str, is_base: bool, n_layers: int):
             if not os.path.exists(os.path.dirname(new_paths[behavior])):
                 os.makedirs(os.path.dirname(new_paths[behavior]))
             t.save(vecs[behavior], new_paths[behavior])
-    
-    
+
+
 if __name__ == "__main__":
-    normalize_vectors("7b", True, 32)
-    normalize_vectors("7b", False, 32)
-    normalize_vectors("13b", False, 36)
+    # Add Argparse for model_size and is_base
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--use_base_model", action="store_true", default=False)
+    parser.add_argument("--model_size", type=str, choices=["7b", "13b"], default="7b")
+    parser.add_argument("--n_layers", type=int, required=True)
+    args = parser.parse_args()
+
+    normalize_vectors(args.model_size, args.use_base_model, args.n_layers)
+
+    # normalize_vectors("7b", True, 32)
+    # normalize_vectors("7b", False, 32)
+    # normalize_vectors("13b", False, 36)

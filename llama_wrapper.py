@@ -2,7 +2,12 @@ import torch as t
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from matplotlib import pyplot as plt
 from matplotlib.ticker import ScalarFormatter
-from utils.helpers import add_vector_from_position, find_instruction_end_postion, get_model_path
+from utils.helpers import (
+    add_vector_from_position,
+    find_instruction_end_postion,
+    get_model_path,
+    selective_add_vector,
+)
 from utils.tokenize import (
     tokenize_llama_chat,
     tokenize_llama_base,
@@ -56,6 +61,7 @@ class BlockOutputWrapper(t.nn.Module):
 
         self.calc_dot_product_with = None
         self.dot_products = []
+        self.generation_dots = []
 
     def forward(self, *args, **kwargs):
         output = self.block(*args, **kwargs)
@@ -70,12 +76,31 @@ class BlockOutputWrapper(t.nn.Module):
             )
             self.dot_products.append((top_token, dot_product.cpu().item()))
         if self.add_activations is not None:
+            curr_pos = kwargs["position_ids"][0, -1].item()
+            if curr_pos >= self.from_position:
+                # Get current token
+                curr_token_activations = self.activations[0, -1, :]
+                decoded = self.unembed_matrix(self.norm(curr_token_activations))
+                top_token_id = t.topk(decoded, 1)[1][0]
+                token = self.tokenizer.decode(top_token_id)
+
+                # Calculate dot product
+                dot_product = t.dot(curr_token_activations, self.add_activations) / (
+                    t.norm(curr_token_activations) * t.norm(self.add_activations)
+                )
+
+                # Store position, token and dot product
+                self.generation_dots.append(
+                    {"position": curr_pos, "token": token, "dot_product": dot_product.cpu().item()}
+                )
+
             augmented_output = add_vector_from_position(
                 matrix=output[0],
                 vector=self.add_activations,
                 position_ids=kwargs["position_ids"],
                 from_pos=self.from_position,
             )
+
             output = (augmented_output,) + output[1:]
 
         if not self.save_internal_decodings:
@@ -121,25 +146,17 @@ class LlamaWrapper:
         self.device = "cuda" if t.cuda.is_available() else "cpu"
         self.use_chat = use_chat
         self.model_name_path = get_model_path(size, not use_chat)
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            self.model_name_path, token=hf_token
-        )
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_name_path, token=hf_token
-        )
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name_path, token=hf_token)
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_name_path, token=hf_token)
         if override_model_weights_path is not None:
             self.model.load_state_dict(t.load(override_model_weights_path))
         if size != "7b":
             self.model = self.model.half()
         self.model = self.model.to(self.device)
         if use_chat:
-            self.END_STR = t.tensor(self.tokenizer.encode(ADD_FROM_POS_CHAT)[1:]).to(
-                self.device
-            )
+            self.END_STR = t.tensor(self.tokenizer.encode(ADD_FROM_POS_CHAT)[1:]).to(self.device)
         else:
-            self.END_STR = t.tensor(self.tokenizer.encode(ADD_FROM_POS_BASE)[1:]).to(
-                self.device
-            )
+            self.END_STR = t.tensor(self.tokenizer.encode(ADD_FROM_POS_BASE)[1:]).to(self.device)
         for i, layer in enumerate(self.model.model.layers):
             self.model.model.layers[i] = BlockOutputWrapper(
                 layer, self.model.lm_head, self.model.model.norm, self.tokenizer
@@ -157,18 +174,27 @@ class LlamaWrapper:
         with t.no_grad():
             instr_pos = find_instruction_end_postion(tokens[0], self.END_STR)
             self.set_from_positions(instr_pos)
-            generated = self.model.generate(
-                inputs=tokens, max_new_tokens=max_new_tokens, top_k=1
-            )
+            generated = self.model.generate(inputs=tokens, max_new_tokens=max_new_tokens, top_k=1)
             return self.tokenizer.batch_decode(generated)[0]
 
-    def generate_text(self, user_input: str, model_output: Optional[str] = None, system_prompt: Optional[str] = None, max_new_tokens: int = 50) -> str:
+    def generate_text(
+        self,
+        user_input: str,
+        model_output: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+        max_new_tokens: int = 50,
+    ) -> str:
         if self.use_chat:
             tokens = tokenize_llama_chat(
-                tokenizer=self.tokenizer, user_input=user_input, model_output=model_output, system_prompt=system_prompt
+                tokenizer=self.tokenizer,
+                user_input=user_input,
+                model_output=model_output,
+                system_prompt=system_prompt,
             )
         else:
-            tokens = tokenize_llama_base(tokenizer=self.tokenizer, user_input=user_input, model_output=model_output)
+            tokens = tokenize_llama_base(
+                tokenizer=self.tokenizer, user_input=user_input, model_output=model_output
+            )
         tokens = t.tensor(tokens).unsqueeze(0).to(self.device)
         return self.generate(tokens, max_new_tokens=max_new_tokens)
 
@@ -179,13 +205,23 @@ class LlamaWrapper:
             logits = self.model(tokens).logits
             return logits
 
-    def get_logits_from_text(self, user_input: str, model_output: Optional[str] = None, system_prompt: Optional[str] = None) -> t.Tensor:
+    def get_logits_from_text(
+        self,
+        user_input: str,
+        model_output: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+    ) -> t.Tensor:
         if self.use_chat:
             tokens = tokenize_llama_chat(
-                tokenizer=self.tokenizer, user_input=user_input, model_output=model_output, system_prompt=system_prompt
+                tokenizer=self.tokenizer,
+                user_input=user_input,
+                model_output=model_output,
+                system_prompt=system_prompt,
             )
         else:
-            tokens = tokenize_llama_base(tokenizer=self.tokenizer, user_input=user_input, model_output=model_output)
+            tokens = tokenize_llama_base(
+                tokenizer=self.tokenizer, user_input=user_input, model_output=model_output
+            )
         tokens = t.tensor(tokens).unsqueeze(0).to(self.device)
         return self.get_logits(tokens)
 
@@ -233,9 +269,7 @@ class LlamaWrapper:
                     topk=topk,
                 )
             if print_mlp:
-                self.print_decoded_activations(
-                    layer.mlp_out_unembedded, "MLP output", topk=topk
-                )
+                self.print_decoded_activations(layer.mlp_out_unembedded, "MLP output", topk=topk)
             if print_block:
                 self.print_decoded_activations(
                     layer.block_output_unembedded, "Block output", topk=topk
@@ -247,16 +281,12 @@ class LlamaWrapper:
         layer = self.model.model.layers[layer_number]
 
         data = {}
-        data["Attention mechanism"] = self.get_activation_data(
-            layer.attn_out_unembedded, topk
-        )[1]
+        data["Attention mechanism"] = self.get_activation_data(layer.attn_out_unembedded, topk)[1]
         data["Intermediate residual stream"] = self.get_activation_data(
             layer.intermediate_resid_unembedded, topk
         )[1]
         data["MLP output"] = self.get_activation_data(layer.mlp_out_unembedded, topk)[1]
-        data["Block output"] = self.get_activation_data(
-            layer.block_output_unembedded, topk
-        )[1]
+        data["Block output"] = self.get_activation_data(layer.block_output_unembedded, topk)[1]
 
         # Plotting
         fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(8, 6))
