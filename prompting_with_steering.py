@@ -37,6 +37,7 @@ def process_item_ab(
     system_prompt: Optional[str],
     a_token_id: int,
     b_token_id: int,
+    layer: int,
 ) -> Dict[str, str]:
     question: str = item["question"]
     answer_matching_behavior = item["answer_matching_behavior"]
@@ -60,11 +61,13 @@ def process_item_open_ended(
     system_prompt: Optional[str],
     a_token_id: int,
     b_token_id: int,
+    layer: int,
 ) -> Dict[str, str]:
     question = item["question"]
     model_output = model.generate_text(
         user_input=question, system_prompt=system_prompt, max_new_tokens=100
     )
+
     return {
         "question": question,
         "model_output": model_output.split(E_INST)[-1].strip(),
@@ -78,6 +81,7 @@ def process_item_tqa_mmlu(
     system_prompt: Optional[str],
     a_token_id: int,
     b_token_id: int,
+    layer: int,
 ) -> Dict[str, str]:
     prompt = item["prompt"]
     correct = item["correct"]
@@ -158,12 +162,16 @@ def test_steering(
             for item in tqdm(test_data, desc=f"Layer {layer}, multiplier {multiplier}"):
                 model.reset_all()
                 model.set_add_activations(layer, multiplier * vector)
+                # Set for storing dot products
+                model.set_calc_dot_product_with(layer, vector)
+                # Remove after if inefficient
                 result = process_methods[settings.type](
                     item=item,
                     model=model,
                     system_prompt=get_system_prompt(settings.behavior, settings.system_prompt),
                     a_token_id=a_token_id,
                     b_token_id=b_token_id,
+                    layer=layer,
                 )
                 results.append(result)
             with open(

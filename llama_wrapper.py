@@ -75,33 +75,34 @@ class BlockOutputWrapper(t.nn.Module):
                 t.norm(last_token_activations) * t.norm(self.calc_dot_product_with)
             )
             self.dot_products.append((top_token, dot_product.cpu().item()))
-        if self.add_activations is not None:
-            curr_pos = kwargs["position_ids"][0, -1].item()
-            if curr_pos >= self.from_position:
-                # Get current token
-                curr_token_activations = self.activations[0, -1, :]
-                decoded = self.unembed_matrix(self.norm(curr_token_activations))
-                top_token_id = t.topk(decoded, 1)[1][0]
-                token = self.tokenizer.decode(top_token_id)
+        # if self.add_activations is not None:
+        #     curr_pos = kwargs["position_ids"][0, -1].item()
+        #     if curr_pos >= self.from_position:
+        #         # Get current token
+        #         curr_token_activations = self.activations[0, -1, :]
+        #         decoded = self.unembed_matrix(self.norm(curr_token_activations))
+        #         top_token_id = t.topk(decoded, 1)[1][0]
+        #         token = self.tokenizer.decode(top_token_id)
 
-                # Calculate dot product
-                dot_product = t.dot(curr_token_activations, self.add_activations) / (
-                    t.norm(curr_token_activations) * t.norm(self.add_activations)
-                )
+        #         # Calculate dot product
+        #         dot_product = t.dot(curr_token_activations, self.add_activations) / (
+        #             t.norm(curr_token_activations) * t.norm(self.add_activations)
+        #         )
 
-                # Store position, token and dot product
-                self.generation_dots.append(
-                    {"position": curr_pos, "token": token, "dot_product": dot_product.cpu().item()}
-                )
+        #         # Store position, token and dot product
+        #         self.generation_dots.append(
+        #             {"position": curr_pos, "token": token, "dot_product": dot_product.cpu().item()}
+        #         )
 
-            augmented_output = add_vector_from_position(
-                matrix=output[0],
-                vector=self.add_activations,
-                position_ids=kwargs["position_ids"],
-                from_pos=self.from_position,
-            )
+        #     # 2 alternatives. Do we need to actually call 2 forward passes? Or do we straight up modify the outputs later?
+        #     augmented_output = add_vector_from_position(
+        #         matrix=output[0],
+        #         vector=self.add_activations,
+        #         position_ids=kwargs["position_ids"],
+        #         from_pos=self.from_position,
+        #     )
 
-            output = (augmented_output,) + output[1:]
+        #     output = (augmented_output,) + output[1:]
 
         if not self.save_internal_decodings:
             return output
@@ -170,11 +171,33 @@ class LlamaWrapper:
         for layer in self.model.model.layers:
             layer.from_position = pos
 
-    def generate(self, tokens, max_new_tokens=100):
+    def generate(self, tokens, max_new_tokens=100, apply_post_processing=False, layer=13):
         with t.no_grad():
             instr_pos = find_instruction_end_postion(tokens[0], self.END_STR)
             self.set_from_positions(instr_pos)
+
+            # Initial generation (generate ids)
             generated = self.model.generate(inputs=tokens, max_new_tokens=max_new_tokens, top_k=1)
+
+            if apply_post_processing:
+                ### Post-processing
+                # Get the dot products and calculate the mean/threshold
+                dot_products = [tup[1] for tup in self.get_dot_products(layer)]
+                mean_dot_product = t.mean(dot_products)
+                threshold = mean_dot_product if mean_dot_product >= 0 else 0
+
+                # Selective mask
+                masked_indices = [dot < threshold for dot in dot_products]
+
+                # Only apply steering vectors to the tokens below the threshold
+                augmented_output = selective_add_vector(
+                    matrix=generated[0],
+                    vector=self.set_add_activations,
+                    selective_mask=masked_indices,
+                )
+
+                generated = (augmented_output,) + generated[1:]
+
             return self.tokenizer.batch_decode(generated)[0]
 
     def generate_text(
@@ -183,6 +206,8 @@ class LlamaWrapper:
         model_output: Optional[str] = None,
         system_prompt: Optional[str] = None,
         max_new_tokens: int = 50,
+        apply_post_processing: bool = False,
+        layer: int = 13,
     ) -> str:
         if self.use_chat:
             tokens = tokenize_llama_chat(
@@ -196,7 +221,12 @@ class LlamaWrapper:
                 tokenizer=self.tokenizer, user_input=user_input, model_output=model_output
             )
         tokens = t.tensor(tokens).unsqueeze(0).to(self.device)
-        return self.generate(tokens, max_new_tokens=max_new_tokens)
+        return self.generate(
+            tokens,
+            max_new_tokens=max_new_tokens,
+            apply_post_processing=apply_post_processing,
+            layer=layer,
+        )
 
     def get_logits(self, tokens):
         with t.no_grad():
