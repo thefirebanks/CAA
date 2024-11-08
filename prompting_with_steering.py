@@ -65,7 +65,11 @@ def process_item_open_ended(
 ) -> Dict[str, str]:
     question = item["question"]
     model_output = model.generate_text(
-        user_input=question, system_prompt=system_prompt, max_new_tokens=100
+        user_input=question,
+        system_prompt=system_prompt,
+        max_new_tokens=100,
+        apply_post_processing=True,
+        layer=layer,
     )
 
     return {

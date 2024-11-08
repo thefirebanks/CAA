@@ -30,12 +30,13 @@ def set_plotting_settings():
     plt.rcParams["axes.prop_cycle"] = plt.cycler(color=custom_colors)
 
 
-def add_vector_from_position(matrix, vector, position_ids, from_pos=None):
+def add_vector_from_position(matrix, vector, position_ids, threshold_mask, from_pos=None):
     from_id = from_pos
     if from_id is None:
         from_id = position_ids.min().item() - 1
 
     mask = position_ids >= from_id
+
     mask = mask.unsqueeze(-1)
 
     matrix += mask.float() * vector
@@ -43,8 +44,14 @@ def add_vector_from_position(matrix, vector, position_ids, from_pos=None):
 
 
 def selective_add_vector(matrix, vector, selective_mask):
-    mask = selective_mask.unsqueeze(-1)
-    matrix += mask.float() * vector
+    # Reshape mask to match matrix dimensions: (sequence_length,) -> (1, sequence_length, 1)
+    mask = selective_mask.unsqueeze(0).unsqueeze(-1)
+
+    # Reshape vector to match matrix dimensions: (hidden_dim,) -> (1, 1, hidden_dim)
+    vector = vector.unsqueeze(0).unsqueeze(0)
+
+    # Now the broadcasting will work correctly
+    matrix += mask.float().cuda() * vector.cuda()
     return matrix
 
 

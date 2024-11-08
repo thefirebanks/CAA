@@ -65,6 +65,10 @@ class BlockOutputWrapper(t.nn.Module):
 
     def forward(self, *args, **kwargs):
         output = self.block(*args, **kwargs)
+
+        # PRINT WHAT THIS IS BEFORE ADDING VECTOR IN THE ORIGINAL VERSION
+        # print(f"Normal forward pass: {output=}")
+
         self.activations = output[0]
         if self.calc_dot_product_with is not None:
             last_token_activations = self.activations[0, -1, :]
@@ -75,34 +79,28 @@ class BlockOutputWrapper(t.nn.Module):
                 t.norm(last_token_activations) * t.norm(self.calc_dot_product_with)
             )
             self.dot_products.append((top_token, dot_product.cpu().item()))
-        # if self.add_activations is not None:
-        #     curr_pos = kwargs["position_ids"][0, -1].item()
-        #     if curr_pos >= self.from_position:
-        #         # Get current token
-        #         curr_token_activations = self.activations[0, -1, :]
-        #         decoded = self.unembed_matrix(self.norm(curr_token_activations))
-        #         top_token_id = t.topk(decoded, 1)[1][0]
-        #         token = self.tokenizer.decode(top_token_id)
+        if self.add_activations is not None:
+            # last_token_activations = self.activations[0, -1, :]
+            # decoded_activations = self.unembed_matrix(self.norm(last_token_activations))
+            # top_token_id = t.topk(decoded_activations, 1)[1][0]
+            # top_token = self.tokenizer.decode(top_token_id)
+            # dot_product = t.dot(last_token_activations, self.calc_dot_product_with) / (
+            #     t.norm(last_token_activations) * t.norm(self.calc_dot_product_with)
+            # )
 
-        #         # Calculate dot product
-        #         dot_product = t.dot(curr_token_activations, self.add_activations) / (
-        #             t.norm(curr_token_activations) * t.norm(self.add_activations)
-        #         )
+            # # print(f"Dot product: {dot_product}")
 
-        #         # Store position, token and dot product
-        #         self.generation_dots.append(
-        #             {"position": curr_pos, "token": token, "dot_product": dot_product.cpu().item()}
-        #         )
+            # if dot_product < 0:
+            # 2 alternatives. Do we need to actually call 2 forward passes? Or do we straight up modify the outputs later?
+            augmented_output = add_vector_from_position(
+                matrix=output[0],
+                vector=self.add_activations,
+                position_ids=kwargs["position_ids"],
+                from_pos=self.from_position,
+                threshold_mask=None,
+            )
 
-        #     # 2 alternatives. Do we need to actually call 2 forward passes? Or do we straight up modify the outputs later?
-        #     augmented_output = add_vector_from_position(
-        #         matrix=output[0],
-        #         vector=self.add_activations,
-        #         position_ids=kwargs["position_ids"],
-        #         from_pos=self.from_position,
-        #     )
-
-        #     output = (augmented_output,) + output[1:]
+            output = (augmented_output,) + output[1:]
 
         if not self.save_internal_decodings:
             return output
@@ -178,25 +176,45 @@ class LlamaWrapper:
 
             # Initial generation (generate ids)
             generated = self.model.generate(inputs=tokens, max_new_tokens=max_new_tokens, top_k=1)
+            # print(f"Generated tokens: {generated}")
+            # print(f"Generated tokens shape: {generated.shape}")
 
-            if apply_post_processing:
-                ### Post-processing
-                # Get the dot products and calculate the mean/threshold
-                dot_products = [tup[1] for tup in self.get_dot_products(layer)]
-                mean_dot_product = t.mean(dot_products)
-                threshold = mean_dot_product if mean_dot_product >= 0 else 0
+            # if apply_post_processing:
+            #     ### Post-processing
+            #     # Get the dot products and calculate the mean/threshold
+            #     dot_products = [tup[1] for tup in self.get_dot_products(layer)]
+            #     mean_dot_product = t.mean(t.Tensor(dot_products))
+            #     threshold = mean_dot_product if mean_dot_product >= 0 else 0
 
-                # Selective mask
-                masked_indices = [dot < threshold for dot in dot_products]
+            #     print(f"Mean dot product: {mean_dot_product}, Threshold: {threshold}")
 
-                # Only apply steering vectors to the tokens below the threshold
-                augmented_output = selective_add_vector(
-                    matrix=generated[0],
-                    vector=self.set_add_activations,
-                    selective_mask=masked_indices,
-                )
+            #     # Selective mask
+            #     # Create selective mask for the sequence
+            #     masked_indices = t.Tensor([dot < threshold for dot in dot_products]).to(self.device)
 
-                generated = (augmented_output,) + generated[1:]
+            #     print(f"Shape of masked_indices: {masked_indices.shape}")
+
+            #     # Ensure the mask matches the sequence length
+            #     # If the generated sequence is longer than the number of dot products we have,
+            #     # we need to pad the mask
+            #     seq_length = generated.size(1)
+            #     if len(masked_indices) < seq_length:
+            #         padding = t.zeros(seq_length - len(masked_indices)).bool().to(self.device)
+            #         masked_indices = t.cat([masked_indices, padding])
+            #     elif len(masked_indices) > seq_length:
+            #         masked_indices = masked_indices[:seq_length]
+
+            #     print(f"Number of tokens below threshold: {sum(masked_indices)}")
+            #     print(f"masked_indices: {masked_indices}")
+
+            #     # Only apply steering vectors to the tokens below the threshold
+            #     augmented_output = selective_add_vector(
+            #         matrix=generated[0],
+            #         vector=self.model.model.layers[layer].add_activations,
+            #         selective_mask=masked_indices,
+            #     )
+
+            #     generated = (augmented_output,) + generated[1:]
 
             return self.tokenizer.batch_decode(generated)[0]
 
