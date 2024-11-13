@@ -22,7 +22,7 @@ from behaviors import (
     get_ab_data_path,
     get_vector_path,
     get_activations_path,
-    ALL_BEHAVIORS
+    ALL_BEHAVIORS,
 )
 
 load_dotenv()
@@ -34,9 +34,7 @@ class ComparisonDataset(Dataset):
     def __init__(self, data_path, token, model_name_path, use_chat):
         with open(data_path, "r") as f:
             self.data = json.load(f)
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            model_name_path, token=token
-        )
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name_path, token=token)
         self.tokenizer.pad_token = self.tokenizer.eos_token
         self.use_chat = use_chat
 
@@ -66,6 +64,7 @@ class ComparisonDataset(Dataset):
         p_tokens = self.prompt_to_tokens(q_text, p_text)
         n_tokens = self.prompt_to_tokens(q_text, n_text)
         return p_tokens, n_tokens
+
 
 def generate_save_vectors_for_behavior(
     layers: List[int],
@@ -126,6 +125,7 @@ def generate_save_vectors_for_behavior(
                 get_activations_path(behavior, layer, model.model_name_path, "neg"),
             )
 
+
 def generate_save_vectors(
     layers: List[int],
     save_activations: bool,
@@ -140,13 +140,9 @@ def generate_save_vectors(
     model_size: size of the model to use, either "7b" or "13b"
     behaviors: behaviors to generate vectors for
     """
-    model = LlamaWrapper(
-        HUGGINGFACE_TOKEN, size=model_size, use_chat=not use_base_model
-    )
+    model = LlamaWrapper(HUGGINGFACE_TOKEN, size=model_size, use_chat=not use_base_model)
     for behavior in behaviors:
-        generate_save_vectors_for_behavior(
-            layers, save_activations, behavior, model
-        )
+        generate_save_vectors_for_behavior(layers, save_activations, behavior, model)
 
 
 if __name__ == "__main__":
@@ -159,9 +155,5 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     generate_save_vectors(
-        args.layers,
-        args.save_activations,
-        args.use_base_model,
-        args.model_size,
-        args.behaviors
+        args.layers, args.save_activations, args.use_base_model, args.model_size, args.behaviors
     )

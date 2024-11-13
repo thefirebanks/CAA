@@ -88,10 +88,9 @@ class BlockOutputWrapper(t.nn.Module):
             #     t.norm(last_token_activations) * t.norm(self.calc_dot_product_with)
             # )
 
-            # # print(f"Dot product: {dot_product}")
+            # print(f"Dot product: {dot_product}")
 
             # if dot_product < 0:
-            # 2 alternatives. Do we need to actually call 2 forward passes? Or do we straight up modify the outputs later?
             augmented_output = add_vector_from_position(
                 matrix=output[0],
                 vector=self.add_activations,
